@@ -1,0 +1,673 @@
+import { Component, OnInit } from '@angular/core';
+import { Router, RouterLink } from '@angular/router';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { ProductService, ProductFilters } from '../../services/product.service';
+import { CartService } from '../../services/cart.service';
+import { MockDataService } from '../../services/mock-data.service';
+import { Product, Category } from '../../models';
+import { CustomerNavComponent } from '../../shared/components/customer-nav.component';
+import { PublicFooterComponent } from '../../shared/components/public-footer.component';
+import { IconComponent } from '../../shared/components/icon.component';
+
+@Component({
+  selector: 'app-customer-explore',
+  standalone: true,
+  imports: [CommonModule, FormsModule, RouterLink, CustomerNavComponent, PublicFooterComponent, IconComponent],
+  template: `
+    <app-customer-nav></app-customer-nav>
+
+    <main class="page-content explore-page">
+      <div class="container">
+        <!-- Header -->
+        <div class="page-header flex justify-between items-center flex-wrap gap-4">
+          <div>
+            <h1>Explore Fitness Meals</h1>
+            <p>Every menu item displays exact macronutrient counts calculated per serving size.</p>
+          </div>
+          <div class="cart-quick-link" *ngIf="cartCount() > 0">
+            <a routerLink="/customer/cart" class="btn btn-primary btn-sm">
+              <app-icon name="shopping-bag" [size]="16"></app-icon>
+              View Cart ({{ cartCount() }} items &bull; {{ cartSubtotal() | currency:'PHP':'symbol' }})
+            </a>
+          </div>
+        </div>
+
+        <!-- Filter Panel -->
+        <div class="filter-panel card">
+          <div class="filter-top-row">
+            <div class="search-input-wrap">
+              <app-icon name="search" [size]="18" class="search-icon"></app-icon>
+              <input
+                type="text"
+                class="form-control search-input"
+                placeholder="Search meal name, ingredients, high-protein bowls..."
+                [(ngModel)]="filters.search"
+                (ngModelChange)="applyFilters()"
+              />
+              <button *ngIf="filters.search" class="clear-btn" (click)="filters.search = ''; applyFilters()">
+                <app-icon name="x" [size]="14"></app-icon>
+              </button>
+            </div>
+
+            <div class="sort-wrap">
+              <label class="sort-label">Sort By:</label>
+              <select class="form-control sort-select" [(ngModel)]="filters.sortBy" (ngModelChange)="applyFilters()">
+                <option value="protein_desc">Highest Protein</option>
+                <option value="calories_asc">Lowest Calories</option>
+                <option value="calories_desc">Highest Calories</option>
+                <option value="price_asc">Price: Low to High</option>
+                <option value="price_desc">Price: High to Low</option>
+                <option value="name">Name (A-Z)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Macro Focus Pills -->
+          <div class="quick-filters-row">
+            <span class="quick-label">Macro Focus:</span>
+            <div class="quick-pills">
+              <button
+                class="pill-btn"
+                [class.active]="filters.quickFilter === 'all'"
+                (click)="setQuickFilter('all')"
+              >
+                All Meals
+              </button>
+              <button
+                class="pill-btn"
+                [class.active]="filters.quickFilter === 'high_protein'"
+                (click)="setQuickFilter('high_protein')"
+              >
+                <app-icon name="target" [size]="12"></app-icon>
+                High Protein (25g+)
+              </button>
+              <button
+                class="pill-btn"
+                [class.active]="filters.quickFilter === 'low_calorie'"
+                (click)="setQuickFilter('low_calorie')"
+              >
+                Low Calorie (&le; 350 kcal)
+              </button>
+              <button
+                class="pill-btn"
+                [class.active]="filters.quickFilter === 'under_500'"
+                (click)="setQuickFilter('under_500')"
+              >
+                Under 500 kcal
+              </button>
+            </div>
+          </div>
+
+          <!-- Categories & Calorie Slider -->
+          <div class="filter-bottom-row">
+            <div class="category-pills">
+              <button
+                class="cat-chip"
+                [class.active]="filters.category === 'all'"
+                (click)="setCategory('all')"
+              >
+                All Categories
+              </button>
+              <button
+                *ngFor="let cat of categories"
+                class="cat-chip"
+                [class.active]="filters.category === cat.name"
+                (click)="setCategory(cat.name)"
+              >
+                {{ cat.name }}
+              </button>
+            </div>
+
+            <div class="calorie-range-wrap">
+              <span class="range-label">Max Calories: <strong>{{ filters.maxCalories || 1000 }}</strong></span>
+              <input
+                type="range"
+                min="200"
+                max="1000"
+                step="50"
+                [(ngModel)]="filters.maxCalories"
+                (ngModelChange)="applyFilters()"
+                class="range-slider"
+              />
+              <button *ngIf="filters.maxCalories" class="btn btn-ghost btn-sm" (click)="resetCalorieRange()">Reset</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feedback Alert if Adding from another seller -->
+        <div class="alert alert-info" *ngIf="feedbackMessage">
+          <app-icon name="info" [size]="16"></app-icon>
+          <span>{{ feedbackMessage }}</span>
+        </div>
+
+        <!-- Meals Count -->
+        <div class="results-header">
+          <p class="results-count">Showing <strong>{{ filteredProducts.length }}</strong> available meals</p>
+          <button class="btn btn-ghost btn-sm" *ngIf="hasActiveFilters()" (click)="resetAllFilters()">
+            Clear Filters
+          </button>
+        </div>
+
+        <!-- Product Cards Grid -->
+        <div class="grid-3 product-grid" *ngIf="filteredProducts.length > 0">
+          <div class="card product-card" *ngFor="let p of filteredProducts">
+            <!-- Product Image -->
+            <div class="product-img-box" [routerLink]="['/customer/product', p.id]">
+              <img [src]="p.imageUrl" [alt]="p.name" loading="lazy" />
+              <span class="category-tag">{{ p.category }}</span>
+              <span class="out-of-stock-pill" *ngIf="p.stock <= 0 || !p.isAvailable">Sold Out</span>
+              <span class="low-stock-pill" *ngIf="p.stock > 0 && p.stock <= 5">Only {{ p.stock }} left</span>
+            </div>
+
+            <!-- Card Body -->
+            <div class="card-body product-card-body">
+              <div class="title-row">
+                <a [routerLink]="['/customer/product', p.id]" class="product-title-link">
+                  <h3 class="product-title">{{ p.name }}</h3>
+                </a>
+                <span class="product-price">{{ p.price | currency:'PHP':'symbol' }}</span>
+              </div>
+
+              <!-- Kitchen / Seller identification -->
+              <span class="seller-attribution">Kitchen: {{ getBusinessName(p.sellerId) }}</span>
+
+              <p class="product-desc">{{ p.description }}</p>
+
+              <!-- Nutrition Facts Box -->
+              <div class="macros-box">
+                <div class="macro-cell highlight-protein">
+                  <span class="macro-val">{{ p.nutrition.protein }}g</span>
+                  <span class="macro-tag">Protein</span>
+                </div>
+                <div class="macro-cell">
+                  <span class="macro-val">{{ p.nutrition.calories }}</span>
+                  <span class="macro-tag">Calories</span>
+                </div>
+                <div class="macro-cell">
+                  <span class="macro-val">{{ p.nutrition.carbs }}g</span>
+                  <span class="macro-tag">Carbs</span>
+                </div>
+                <div class="macro-cell">
+                  <span class="macro-val">{{ p.nutrition.fat }}g</span>
+                  <span class="macro-tag">Fat</span>
+                </div>
+              </div>
+
+              <!-- Serving Size & Action Button -->
+              <div class="card-actions-row">
+                <div class="serving-size-info">
+                  <span class="serving-size-text">Serving: {{ p.nutrition.servingSize }}</span>
+                  <small class="verified-label">Seller-provided data</small>
+                </div>
+                <div class="action-buttons-group">
+                  <a [routerLink]="['/customer/product', p.id]" class="btn btn-secondary btn-sm" title="View details">
+                    Details
+                  </a>
+                  <button
+                    class="btn btn-primary btn-sm"
+                    [disabled]="!p.isAvailable || p.stock <= 0"
+                    (click)="addToCart(p)"
+                  >
+                    <app-icon name="plus" [size]="14"></app-icon>
+                    Add
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Empty state -->
+        <div class="empty-state card" *ngIf="filteredProducts.length === 0">
+          <app-icon name="search" [size]="48" color="var(--color-text-tertiary)"></app-icon>
+          <h3>No Meals Found</h3>
+          <p>No dishes match your specific macro filters or search keywords.</p>
+          <button class="btn btn-outline" (click)="resetAllFilters()">Reset All Filters</button>
+        </div>
+      </div>
+    </main>
+
+    <app-public-footer></app-public-footer>
+  `,
+  styles: [`
+    .explore-page {
+      background: var(--color-bg-secondary);
+      min-height: 85vh;
+    }
+    .page-header h1 {
+      font-size: var(--font-size-2xl);
+      margin-bottom: 4px;
+    }
+    .page-header p {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+    }
+
+    .filter-panel {
+      padding: var(--space-5);
+      margin-bottom: var(--space-6);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-4);
+      border: 1px solid var(--color-border);
+    }
+    .filter-top-row {
+      display: flex;
+      gap: var(--space-4);
+      align-items: center;
+    }
+    .search-input-wrap {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      color: var(--color-text-secondary);
+      pointer-events: none;
+    }
+    .search-input {
+      padding-left: 38px;
+      padding-right: 32px;
+      height: 42px;
+    }
+    .clear-btn {
+      position: absolute;
+      right: 10px;
+      background: none;
+      border: none;
+      color: var(--color-text-tertiary);
+      cursor: pointer;
+    }
+    .sort-wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      white-space: nowrap;
+    }
+    .sort-label {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-secondary);
+      font-weight: 500;
+    }
+    .sort-select {
+      width: auto;
+      min-width: 170px;
+      height: 42px;
+    }
+
+    .quick-filters-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      flex-wrap: wrap;
+      padding-top: var(--space-2);
+      border-top: 1px solid var(--color-border);
+    }
+    .quick-label {
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      color: var(--color-text-secondary);
+    }
+    .quick-pills {
+      display: flex;
+      gap: var(--space-2);
+      flex-wrap: wrap;
+    }
+    .pill-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 12px;
+      font-size: var(--font-size-xs);
+      font-weight: 500;
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-full);
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .pill-btn:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
+    .pill-btn.active {
+      background: var(--color-primary);
+      color: white;
+      border-color: var(--color-primary);
+    }
+
+    .filter-bottom-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--space-4);
+      flex-wrap: wrap;
+    }
+    .category-pills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .cat-chip {
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      padding: 4px 10px;
+      font-size: var(--font-size-xs);
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: all var(--transition-fast);
+    }
+    .cat-chip:hover {
+      background: var(--color-bg-secondary);
+      color: var(--color-text);
+    }
+    .cat-chip.active {
+      background: var(--color-primary-light);
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+      font-weight: 600;
+    }
+
+    .calorie-range-wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+    .range-label {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+    }
+    .range-slider {
+      width: 120px;
+      accent-color: var(--color-primary);
+    }
+
+    .results-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-4);
+    }
+    .results-count {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+    }
+
+    .product-grid {
+      gap: var(--space-6);
+    }
+    .product-card {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--color-border);
+      transition: transform var(--transition), box-shadow var(--transition);
+    }
+    .product-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+    }
+    .product-img-box {
+      position: relative;
+      height: 200px;
+      background: var(--color-bg-secondary);
+      overflow: hidden;
+      cursor: pointer;
+    }
+    .product-img-box img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .category-tag {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(26, 26, 26, 0.75);
+      backdrop-filter: blur(4px);
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: var(--radius-full);
+    }
+    .out-of-stock-pill {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: var(--color-danger);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: var(--radius-full);
+    }
+    .low-stock-pill {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      background: rgba(240, 173, 78, 0.95);
+      color: #78350F;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: var(--radius-full);
+    }
+    .product-card-body {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      padding: var(--space-4);
+    }
+    .title-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 2px;
+      gap: var(--space-2);
+    }
+    .product-title-link {
+      color: inherit;
+      text-decoration: none;
+    }
+    .product-title-link:hover .product-title {
+      color: var(--color-primary);
+    }
+    .product-title {
+      font-size: var(--font-size-base);
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .product-price {
+      font-size: var(--font-size-base);
+      font-weight: 700;
+      color: var(--color-primary);
+      white-space: nowrap;
+    }
+    .seller-attribution {
+      font-size: 11px;
+      color: var(--color-text-secondary);
+      margin-bottom: var(--space-2);
+      display: block;
+    }
+    .product-desc {
+      font-size: var(--font-size-xs);
+      color: var(--color-text-secondary);
+      line-height: 1.5;
+      margin-bottom: var(--space-4);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .macros-box {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 4px;
+      background: var(--color-bg-secondary);
+      padding: 8px 4px;
+      border-radius: var(--radius-sm);
+      margin-bottom: var(--space-4);
+    }
+    .macro-cell {
+      text-align: center;
+    }
+    .macro-cell.highlight-protein .macro-val {
+      color: var(--color-primary);
+      font-weight: 700;
+    }
+    .macro-val {
+      display: block;
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+    }
+    .macro-tag {
+      font-size: 9px;
+      color: var(--color-text-secondary);
+      text-transform: uppercase;
+    }
+    .card-actions-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: auto;
+      padding-top: var(--space-3);
+      border-top: 1px solid var(--color-border);
+      gap: var(--space-2);
+    }
+    .serving-size-info {
+      display: flex;
+      flex-direction: column;
+    }
+    .serving-size-text {
+      font-size: 11px;
+      color: var(--color-text-secondary);
+      font-weight: 500;
+    }
+    .verified-label {
+      font-size: 9px;
+      color: var(--color-text-tertiary);
+    }
+    .action-buttons-group {
+      display: flex;
+      gap: var(--space-2);
+    }
+
+    .alert-info {
+      background: var(--color-info-bg);
+      color: #1E40AF;
+      border: 1px solid rgba(59, 130, 246, 0.2);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      margin-bottom: var(--space-4);
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--font-size-xs);
+    }
+
+    @media (max-width: 768px) {
+      .filter-top-row, .filter-bottom-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .calorie-range-wrap {
+        justify-content: space-between;
+      }
+    }
+  `]
+})
+export class CustomerExploreComponent implements OnInit {
+  allProducts: Product[] = [];
+  filteredProducts: Product[] = [];
+  categories: Category[] = [];
+  feedbackMessage = '';
+
+  filters: ProductFilters = {
+    search: '',
+    category: 'all',
+    sortBy: 'protein_desc',
+    quickFilter: 'all',
+    maxCalories: undefined
+  };
+
+  constructor(
+    private productService: ProductService,
+    private cartService: CartService,
+    private mockData: MockDataService,
+    private router: Router
+  ) {}
+
+  ngOnInit() {
+    this.allProducts = this.productService.getProducts();
+    this.categories = this.productService.getCategories();
+    this.applyFilters();
+  }
+
+  cartCount(): number {
+    return this.cartService.itemCount();
+  }
+
+  cartSubtotal(): number {
+    return this.cartService.subtotal();
+  }
+
+  getBusinessName(sellerId: string): string {
+    const biz = this.mockData.getBusinessBySellerId(sellerId);
+    return biz ? biz.businessName : 'FitFuel Kitchen';
+  }
+
+  applyFilters() {
+    this.filteredProducts = this.productService.filterProducts(this.allProducts, this.filters);
+  }
+
+  setQuickFilter(q: 'all' | 'high_protein' | 'low_calorie' | 'under_500') {
+    this.filters.quickFilter = q;
+    this.applyFilters();
+  }
+
+  setCategory(cat: string) {
+    this.filters.category = cat;
+    this.applyFilters();
+  }
+
+  resetCalorieRange() {
+    this.filters.maxCalories = undefined;
+    this.applyFilters();
+  }
+
+  resetAllFilters() {
+    this.filters = {
+      search: '',
+      category: 'all',
+      sortBy: 'protein_desc',
+      quickFilter: 'all',
+      maxCalories: undefined
+    };
+    this.applyFilters();
+  }
+
+  hasActiveFilters(): boolean {
+    return !!this.filters.search ||
+      this.filters.category !== 'all' ||
+      this.filters.quickFilter !== 'all' ||
+      this.filters.maxCalories !== undefined;
+  }
+
+  addToCart(product: Product) {
+    this.feedbackMessage = '';
+    const res = this.cartService.addItem(product, 1);
+    if (!res.success) {
+      this.feedbackMessage = res.message;
+    } else {
+      this.feedbackMessage = `Added ${product.name} to cart.`;
+      setTimeout(() => this.feedbackMessage = '', 3000);
+    }
+  }
+}
